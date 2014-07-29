@@ -85,7 +85,7 @@ To easily filter instances by instance id, they can be passed as a comma-separat
 ```
 
 ### Print only instances that are an m1.small
-Note that the filters arg allows you to pass filters down directory to the underlying aws ec2 command. See the ec2 api for information on the types of filtering you can do.
+Note that the filters arg allows you to pass filters down directory to the underlying aws ec2 command. See the [ec2 api](http://docs.aws.amazon.com/cli/latest/reference/ec2/describe-instances.html) for information on the types of filtering you can do.
 ```
 $ ./list -f Name=instance-type,Values=m1.small
 ```
