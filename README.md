@@ -1,7 +1,6 @@
 ec2list
 =======
-
-List hosts across multiple accounts and all regions. Saves you from having to go searching through accounts if you're looking for a specific instance.
+Quickly and easily list hosts across multiple accounts and all regions. Saves you from having to go searching through accounts if you're looking for a specific instance.
 
 The application is multi-threaded and should return results in 5 to 6 seconds depending on how many accounts and regions you have. To get better performance comment out regions that you aren't actively using.
 
