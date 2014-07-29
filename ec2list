@@ -1,0 +1,198 @@
+#!/usr/bin/env python
+'''
+List all hosts in all aws accounts. This script reads directly from $HOME/.aws/config
+(which is the same config file used by aws commandline tools) to gather a list
+of all running instances.
+
+You must have the aws cli library installed:
+
+  $ pip install awscli
+
+This script is multithreaded and should be able to pull down all instances within
+5 or 6 seconds depending on how many accounts you have.
+'''
+
+import json
+import argparse
+import subprocess
+from ConfigParser import ConfigParser
+from os import getenv
+from sys import exit
+from threading import Thread
+
+parser = argparse.ArgumentParser()
+parser.add_argument('-i','--instances',dest='instance_filter',
+  help='Comma-separated list of instances to filter results.')
+parser.add_argument('-v','--verbose',dest='verbose',action='store_true',
+  help='Print all host metadata.')
+parser.add_argument('-a','--all',dest='all_hosts',action='store_true',
+  help='List all hosts, even those that aren\'t running.')
+parser.add_argument('-f','--filter',dest='filter',
+  help='key value filters to pass directly to command. Eg: Name=instance-type,Value=m1.small')
+
+args = parser.parse_args()
+verbose = args.verbose
+filters = args.filter
+all_hosts = args.all_hosts
+instance_filter = args.instance_filter
+
+if instance_filter:
+  instance_filter = [ i for i in instance_filter.split(',') ]
+
+# This is the same config file used by aws cli tools
+CONF = getenv('HOME') + '/.aws/config'
+cf = ConfigParser()
+
+# Read the account info from the configuration file and load it into a dictionary
+try:
+ cf.read(CONF)
+except Exception, e:
+  print(e)
+  print("Unable to read or parse config file: %s" % CONF)
+  exit(1)
+
+# This will hold all of the instance info as we gather it
+ec2_instances = {}
+
+# These are values that need to be serialized into json
+json_values = frozenset([
+  'Monitoring',
+  'Tags',
+  'BlockDeviceMappings',
+  'StateReason',
+  'SecurityGroups',
+  'State', 
+  'Placement',
+  'NetworkInterfaces',
+])
+
+# All of the regions we expect to find instances. Comment out regions that
+# you don't have instances in to get better performance
+regions = frozenset([
+  'ap-northeast-1',
+  'ap-southeast-1',
+  'ap-southeast-2',
+  'eu-west-1',
+  'sa-east-1',
+  'us-east-1',
+  'us-west-1',
+  'us-west-2',
+])
+
+def gather_instance_data(account,region,filters=filters):
+  '''
+  Gather all of the instance information from Ec2.
+
+  This function populates the 'ec2_instances' dictionary.
+  '''
+
+  if filters:
+    reservations = subprocess.check_output("aws ec2 describe-instances --profile=%s --region=%s --filters %s --output=json" % (account,region,filters),shell=True)
+  else:
+    reservations = subprocess.check_output("aws ec2 describe-instances --profile=%s --region=%s --output=json" % (account,region),shell=True)
+
+  reservations = json.loads(reservations)
+  instances = reservations.values()
+
+  for instances in instances:
+    for instance in instances:
+      # Add the account and instance ID right away
+      instance_id = instance['Instances'][0]['InstanceId']
+      ec2_instances[instance_id] = {}
+      ec2_instances[instance_id]['account'] = account
+
+      # Iterate through all of the items. We'll grab the 'Name' of the host
+      # from the keys if we see it
+      for k,v in instance['Instances'][0].iteritems():
+
+        # Slurp the 'Name' tag out to a special var
+        if k == 'Tags':
+          for tags in v:
+            if 'Name' in tags['Key']:
+              ec2_instances[instance_id]['Name'] = tags['Value']
+          if 'Name' not in ec2_instances[instance_id]:
+              ec2_instances[instance_id]['Name'] = None
+
+        # Populate the instance's metadata
+        ec2_instances[instance_id][k] = v
+
+def check(host,item):
+  '''
+  Helper function.
+
+  Check if the var exists. Return None for the var if it doesn't exist without
+  throwing an exception. This allows us to try and print vars even if the
+  instance might be turned off.
+  '''
+  if item in host:
+    return host[item]
+  else:
+    return 'None'
+
+def print_verbose():
+  '''
+  Print all of the host's metadata. EVERYTHING. Output is unsorted and noisy.
+  '''
+  for host, values in ec2_instances.iteritems():
+
+    if instance_filter:
+      if host not in instance_filter:
+        continue
+
+    if not all_hosts:
+      if values['State']['Name'] != 'running':
+        continue
+
+    print host + ':'
+    for k, v in values.iteritems():
+      if k in json_values:
+        v = json.dumps(v)
+
+      print "  %s: %s" % (k,v)
+
+    # Make a new line so it's easier to read
+    print
+
+def print_succinct():
+  '''
+  Print just basic information regarding a host in a consistent order.
+  '''
+  for host, values in ec2_instances.iteritems():
+
+    if instance_filter:
+      if host not in instance_filter:
+        continue
+
+    if not all_hosts:
+      if values['State']['Name'] != 'running':
+        continue
+
+    # This is a little messy, but print this way allows the output to be a
+    # predictable space-separated list
+    print                               \
+      check(values,'InstanceId'),       \
+      check(values,'Name'),             \
+      check(values,'PrivateIpAddress'), \
+      check(values,'PublicIpAddress'),  \
+      values['InstanceType'],           \
+      values['account']
+
+def main():
+  threads = []
+  for account in cf.sections():
+    account = account.split()[-1]
+    for region in regions:
+      thread = Thread(target=gather_instance_data,args=(account,region,))
+      thread.start()
+      threads.append(thread)
+
+  for i in threads:
+    i.join()
+
+  if verbose:
+    print_verbose()
+  else:
+    print_succinct()
+
+if __name__ == '__main__':
+  exit(main())
